@@ -8,12 +8,13 @@
     #efm-app .efm-breadcrumbs { white-space: normal; }
     #efm-app .efm-breadcrumbs .btn { font-weight: 500; }
     #efm-app .efm-breadcrumb-separator { color: var(--bs-secondary-color, #6c757d); padding: 0 .35rem; }
-    #efm-app .efm-table { table-layout: fixed; margin-bottom: 0; }
-    #efm-app .efm-table th:first-child,
-    #efm-app .efm-table td:first-child { width: 3.5rem; text-align: center; }
-    #efm-app .efm-table th:last-child,
-    #efm-app .efm-table td:last-child { width: 8rem; }
-    #efm-app .efm-name { overflow-wrap: anywhere; word-break: break-word; }
+    #efm-app .efm-table { width: 100%; table-layout: fixed; margin-bottom: 0; }
+    #efm-app .efm-select-col,
+    #efm-app .efm-select-cell { width: 3.5rem; text-align: center; }
+    #efm-app .efm-type-col,
+    #efm-app .efm-type-cell { width: 8rem; text-align: right; white-space: nowrap; }
+    #efm-app .efm-name-cell { min-width: 0; }
+    #efm-app .efm-file-name { display: inline-block; max-width: calc(100% - 2rem); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: middle; }
     #efm-app .efm-folder-row td { background: var(--bs-tertiary-bg, rgba(128, 128, 128, .12)); }
     #efm-app .efm-folder-link { display: flex; width: 100%; align-items: center; gap: .5rem; text-align: left; }
     #efm-app .efm-folder-icon,
@@ -25,10 +26,10 @@
         #efm-app .efm-toolbar .efm-playlist,
         #efm-app .efm-toolbar .btn { width: 100%; }
         #efm-app .efm-selection-count { min-width: 0; }
-        #efm-app .efm-table th:last-child,
-        #efm-app .efm-table td:last-child { width: 5.5rem; }
-        #efm-app .efm-table th:first-child,
-        #efm-app .efm-table td:first-child { width: 3rem; }
+        #efm-app .efm-select-col,
+        #efm-app .efm-select-cell { width: 3rem; }
+        #efm-app .efm-type-col,
+        #efm-app .efm-type-cell { width: 5.5rem; }
     }
 </style>
 
@@ -61,7 +62,8 @@
         <div id="efm-message" class="efm-message alert mb-3" role="status" aria-live="polite"></div>
         <div class="table-responsive">
             <table class="table table-striped table-hover align-middle efm-table">
-                <thead><tr><th scope="col"><input id="efm-all" type="checkbox" aria-label="Select all visible videos"></th><th scope="col">Name</th><th scope="col">Type</th></tr></thead>
+                <colgroup><col class="efm-select-col"><col><col class="efm-type-col"></colgroup>
+                <thead><tr><th class="efm-select-col" scope="col"><input id="efm-all" type="checkbox" aria-label="Select all visible videos"></th><th scope="col">Name</th><th class="efm-type-col" scope="col">Type</th></tr></thead>
                 <tbody id="efm-list"></tbody>
             </table>
         </div>
@@ -129,7 +131,7 @@
                 return '<tr class="efm-folder-row"><td></td><td class="efm-name" colspan="2"><button class="btn btn-link p-0 efm-folder-link" type="button" data-path="' + escapeHtml(item.path) + '"><span class="efm-folder-icon" aria-hidden="true">📁</span><span>' + escapeHtml(item.name) + '</span></button></td></tr>';
             }
             const checked = selected.has(item.path) ? ' checked' : '';
-            return '<tr><td><input class="efm-file" type="checkbox" value="' + escapeHtml(item.path) + '" aria-label="Select ' + escapeHtml(item.name) + '"' + checked + '></td><td class="efm-name"><span class="efm-video-icon me-1" aria-hidden="true">▸</span>' + escapeHtml(item.name) + '</td><td><span class="badge badge-secondary">Video</span></td></tr>';
+            return '<tr><td class="efm-select-cell"><input class="efm-file" type="checkbox" value="' + escapeHtml(item.path) + '" aria-label="Select ' + escapeHtml(item.name) + '"' + checked + '></td><td class="efm-name-cell"><span class="efm-video-icon me-1" aria-hidden="true">🎬</span><span class="efm-file-name" title="' + escapeHtml(item.name) + '">' + escapeHtml(item.name) + '</span></td><td class="efm-type-cell"><span class="badge badge-secondary">Video</span></td></tr>';
         }).join('');
         updateSelectionUi();
     }
