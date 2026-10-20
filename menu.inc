@@ -20,7 +20,7 @@
 $menuEntries = Array(
 	Array(
 		'text' => 'Extended File Manager',
-		'type' => 'status',
+		'type' => 'content',
 		'page' => 'content.php',
 		'wrap' => 1
 	),
