@@ -1,0 +1,146 @@
+<?php
+/** Duration probing, playlist statistics, and safe repair helpers. */
+
+function efm_duration_is_valid($duration)
+{
+    return is_numeric($duration) && is_finite((float) $duration) && (float) $duration > 0;
+}
+
+function efm_probe_duration($file, $probeBinary = 'ffprobe')
+{
+    if (!is_string($file) || !is_file($file) || !is_readable($file)) return false;
+    $command = escapeshellarg($probeBinary) . ' -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 ' . escapeshellarg($file) . ' 2>/dev/null';
+    $descriptors = array(0 => array('pipe', 'r'), 1 => array('pipe', 'w'), 2 => array('pipe', 'w'));
+    $process = proc_open($command, $descriptors, $pipes);
+    if (!is_resource($process)) return false;
+    fclose($pipes[0]);
+    $output = trim(stream_get_contents($pipes[1]));
+    fclose($pipes[1]);
+    fclose($pipes[2]);
+    $exitCode = proc_close($process);
+    if ($exitCode !== 0 || !efm_duration_is_valid($output)) return false;
+    return (float) $output;
+}
+
+function efm_playlist_storage($settings, $playlistName)
+{
+    $playlistName = efm_playlist_name($playlistName);
+    $media = isset($settings['mediaDirectory']) ? realpath($settings['mediaDirectory']) : false;
+    $directory = isset($settings['playlistDirectory']) ? realpath($settings['playlistDirectory']) : false;
+    if ($playlistName === false || $media === false || $directory === false || !is_dir($media) || !is_dir($directory) || ($directory !== $media && strpos($directory, $media . DIRECTORY_SEPARATOR) !== 0)) return false;
+    $file = $directory . DIRECTORY_SEPARATOR . $playlistName . '.json';
+    if (!is_file($file) || is_link($file)) return false;
+    return array('name' => $playlistName, 'directory' => $directory, 'file' => $file);
+}
+
+function efm_probe_binary($settings)
+{
+    return isset($settings['ffprobeBinary']) && is_string($settings['ffprobeBinary']) && $settings['ffprobeBinary'] !== '' ? $settings['ffprobeBinary'] : 'ffprobe';
+}
+
+function efm_recalculate_playlist_info(&$playlist)
+{
+    if (!isset($playlist['playlistInfo']) || !is_array($playlist['playlistInfo'])) $playlist['playlistInfo'] = array();
+    $totalItems = 0;
+    $totalDuration = 0.0;
+    foreach (array('leadIn', 'mainPlaylist', 'leadOut') as $section) {
+        $entries = isset($playlist[$section]) && is_array($playlist[$section]) ? $playlist[$section] : array();
+        $duration = 0.0;
+        foreach ($entries as $entry) {
+            if (is_array($entry) && efm_duration_is_valid(isset($entry['duration']) ? $entry['duration'] : null)) $duration += (float) $entry['duration'];
+        }
+        $count = count($entries);
+        $playlist['playlistInfo'][$section . '_items'] = $count;
+        $playlist['playlistInfo'][$section . '_duration'] = $duration;
+        $totalItems += $count;
+        $totalDuration += $duration;
+    }
+    $playlist['playlistInfo']['total_items'] = $totalItems;
+    $playlist['playlistInfo']['total_duration'] = $totalDuration;
+}
+
+function efm_write_playlist_locked($handle, $directory, $file, $playlist)
+{
+    $encoded = json_encode($playlist, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
+    $temporary = $encoded === false ? false : tempnam($directory, '.efm-playlist-');
+    $written = $temporary === false ? false : file_put_contents($temporary, $encoded, LOCK_EX);
+    if ($encoded === false || $temporary === false || $written !== strlen($encoded) || !rename($temporary, $file)) {
+        if ($temporary !== false && is_file($temporary)) unlink($temporary);
+        flock($handle, LOCK_UN);
+        fclose($handle);
+        return false;
+    }
+    flock($handle, LOCK_UN);
+    fclose($handle);
+    return true;
+}
+
+function efm_add_to_playlist($settings, $playlistName, $paths)
+{
+    $root = efm_video_root($settings);
+    $storage = efm_playlist_storage($settings, $playlistName);
+    if ($root === false || $storage === false || !is_array($paths) || count($paths) < 1 || count($paths) > 500) return array('ok' => false, 'error' => 'Invalid playlist or media selection.');
+    $valid = array();
+    foreach ($paths as $path) {
+        $path = efm_relative_path($path);
+        if ($path === false || efm_path_inside($root, $path, true) === false || !efm_video_extension($path)) return array('ok' => false, 'error' => 'One or more selected files are not safe video files.');
+        if (!in_array($path, $valid, true)) $valid[] = $path;
+    }
+    $durations = array();
+    foreach ($valid as $path) {
+        $duration = efm_probe_duration(efm_path_inside($root, $path, true), efm_probe_binary($settings));
+        if ($duration === false) return array('ok' => false, 'error' => 'Could not read the duration of ' . $path . '. No playlist changes were made.');
+        $durations[$path] = $duration;
+    }
+    $handle = fopen($storage['file'], 'c+');
+    if ($handle === false || !flock($handle, LOCK_EX)) return array('ok' => false, 'error' => 'Could not lock playlist.');
+    $playlist = json_decode(stream_get_contents($handle), true);
+    if (!is_array($playlist)) { flock($handle, LOCK_UN); fclose($handle); return array('ok' => false, 'error' => 'Playlist JSON is invalid.'); }
+    if (!isset($playlist['mainPlaylist']) || !is_array($playlist['mainPlaylist'])) $playlist['mainPlaylist'] = array();
+    $existing = array();
+    foreach ($playlist['mainPlaylist'] as $entry) if (is_array($entry) && isset($entry['mediaName'])) $existing[$entry['mediaName']] = true;
+    $added = 0;
+    foreach ($valid as $path) {
+        if (isset($existing[$path])) continue;
+        $playlist['mainPlaylist'][] = array('type' => 'media', 'enabled' => 1, 'playOnce' => 0, 'mediaName' => $path, 'duration' => $durations[$path]);
+        $existing[$path] = true;
+        $added++;
+    }
+    $playlist['name'] = isset($playlist['name']) ? $playlist['name'] : $storage['name'];
+    $playlist['version'] = isset($playlist['version']) ? $playlist['version'] : 3;
+    efm_recalculate_playlist_info($playlist);
+    if (!efm_write_playlist_locked($handle, $storage['directory'], $storage['file'], $playlist)) return array('ok' => false, 'error' => 'Could not safely write playlist.');
+    return array('ok' => true, 'added' => $added, 'skipped' => count($valid) - $added, 'playlist' => $storage['name']);
+}
+
+function efm_repair_playlist_durations($settings, $playlistName, $apply = false)
+{
+    $root = efm_video_root($settings);
+    $storage = efm_playlist_storage($settings, $playlistName);
+    if ($root === false || $storage === false) return array('ok' => false, 'error' => 'Playlist or media storage is unavailable.');
+    $handle = fopen($storage['file'], 'c+');
+    if ($handle === false || !flock($handle, LOCK_EX)) return array('ok' => false, 'error' => 'Could not lock playlist.');
+    $playlist = json_decode(stream_get_contents($handle), true);
+    if (!is_array($playlist)) { flock($handle, LOCK_UN); fclose($handle); return array('ok' => false, 'error' => 'Playlist JSON is invalid.'); }
+    $updates = array();
+    $errors = array();
+    foreach (array('leadIn', 'mainPlaylist', 'leadOut') as $section) {
+        if (!isset($playlist[$section]) || !is_array($playlist[$section])) continue;
+        foreach ($playlist[$section] as $index => &$entry) {
+            if (!is_array($entry) || !isset($entry['mediaName']) || efm_duration_is_valid(isset($entry['duration']) ? $entry['duration'] : null)) continue;
+            $path = efm_relative_path($entry['mediaName']);
+            $file = $path !== false && efm_video_extension($path) ? efm_path_inside($root, $path, true) : false;
+            if ($file === false) { $errors[] = $section . '[' . $index . '] ' . (isset($entry['mediaName']) ? $entry['mediaName'] : 'unknown media'); continue; }
+            $duration = efm_probe_duration($file, efm_probe_binary($settings));
+            if ($duration === false) { $errors[] = $section . '[' . $index . '] ' . $path; continue; }
+            $updates[] = array('section' => $section, 'index' => $index, 'path' => $path, 'duration' => $duration);
+            if ($apply) $entry['duration'] = $duration;
+        }
+        unset($entry);
+    }
+    if (count($errors) > 0) { flock($handle, LOCK_UN); fclose($handle); return array('ok' => false, 'applied' => false, 'updates' => $updates, 'errors' => $errors); }
+    if (!$apply) { flock($handle, LOCK_UN); fclose($handle); return array('ok' => true, 'applied' => false, 'updates' => $updates, 'errors' => array()); }
+    efm_recalculate_playlist_info($playlist);
+    if (!efm_write_playlist_locked($handle, $storage['directory'], $storage['file'], $playlist)) return array('ok' => false, 'applied' => false, 'error' => 'Could not safely write playlist.');
+    return array('ok' => true, 'applied' => true, 'updates' => $updates, 'errors' => array());
+}

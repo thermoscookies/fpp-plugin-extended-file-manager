@@ -8,9 +8,20 @@ An FPP 10.2 plugin that provides a separate, folder-aware video browser. It supp
 - Shows video files in the current folder and navigable subfolders.
 - Rejects absolute paths, `.`/`..` traversal, backslashes, symlinks, non-video files, and paths outside the resolved video directory.
 - Adds entries to the selected playlist's `mainPlaylist`, preserving all other playlist data and skipping duplicate `mediaName` entries.
+- Probes each new video with `ffprobe`, stores its actual duration, and recalculates all playlist section and total duration/item statistics.
 - Does not create, delete, rename, or upload media, and has no daemon or external service.
 
 The playlist write is explicit: it happens only after the operator presses “Add selected to playlist.” Existing FPP playlist JSON is read under an exclusive lock and rewritten with appended entries. FPP's playlist format and relative media behavior are documented in the official FPP configuration documentation.
+
+## Safe duration repair
+
+The plugin API provides a repair operation for existing video entries whose `duration` is missing or invalid:
+
+- `POST /api/plugin/fpp-plugin-extended-file-manager/repair` with `{"playlist":"Christmas"}` performs a dry run and reports probeable entries without writing.
+- Add `"apply": true` only after reviewing the dry-run result. The apply operation updates missing video durations, recalculates section and total statistics, preserves entry metadata, and writes atomically.
+- Missing files, non-video entries, or failed `ffprobe` calls are reported and prevent any repair write. Existing valid durations are left unchanged.
+
+This operation is not run automatically by the browser and has not been run against production playlists.
 
 ## Development checks
 
@@ -19,6 +30,8 @@ php -l api.php
 php -l lib/MediaBrowser.php
 php -l content.php
 php tests/test_media_browser.php
+php tests/test_playlist_durations.php
+node tests/test_content_selection.js
 python3 -m json.tool pluginInfo.json >/dev/null
 ```
 
