@@ -22,6 +22,9 @@
     #efm-app .efm-folder-icon { color: var(--bs-warning, #f0ad4e); }
     #efm-app .efm-video-icon { color: var(--bs-info, #5bc0de); }
     #efm-app .efm-message:empty { display: none; }
+    #efm-app .efm-repair-panel { border: 1px solid var(--bs-border-color, rgba(128, 128, 128, .35)); border-radius: .375rem; background: var(--bs-tertiary-bg, rgba(128, 128, 128, .12)); }
+    #efm-app .efm-repair-results { max-height: 20rem; overflow: auto; }
+    #efm-app .efm-repair-results table { margin-bottom: 0; }
     @media (max-width: 575.98px) {
         #efm-app .efm-toolbar .efm-playlist,
         #efm-app .efm-toolbar .btn { width: 100%; }
@@ -52,10 +55,23 @@
                 <div class="d-flex flex-wrap gap-2">
                     <button id="efm-clear" class="btn btn-outline-secondary" type="button" disabled>Clear selection</button>
                     <button id="efm-add" class="btn btn-primary" type="button" disabled>Add to playlist</button>
+                    <button id="efm-repair" class="btn btn-outline-info" type="button" disabled>Repair Playlist Durations</button>
                 </div>
             </div>
         </div>
     </div>
+
+    <section id="efm-repair-panel" class="efm-repair-panel p-3 mb-3" hidden aria-labelledby="efm-repair-title">
+        <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-2">
+            <h3 id="efm-repair-title" class="h5 mb-0">Repair Playlist Durations</h3>
+            <span class="text-muted small">Dry-run preview; no changes are made until confirmed.</span>
+        </div>
+        <div id="efm-repair-results" class="efm-repair-results"></div>
+        <div class="d-flex flex-wrap gap-2 mt-3">
+            <button id="efm-repair-cancel" class="btn btn-outline-secondary" type="button">Cancel</button>
+            <button id="efm-repair-confirm" class="btn btn-warning" type="button" hidden>Confirm Repair</button>
+        </div>
+    </section>
 
     <div class="efm-browser p-2 p-sm-3">
         <nav id="efm-breadcrumb" class="efm-breadcrumbs mb-3" aria-label="Video folders"></nav>
@@ -75,6 +91,8 @@
     const base = 'api/plugin/fpp-plugin-extended-file-manager/';
     let current = '';
     const selected = new Set();
+    let repairBusy = false;
+    let repairPreview = null;
     const $ = (id) => document.getElementById(id);
 
     function escapeHtml(value) {
@@ -92,6 +110,8 @@
         $('efm-selected-count').textContent = count;
         $('efm-add').disabled = count === 0 || !$('efm-playlist').value;
         $('efm-clear').disabled = count === 0;
+        $('efm-repair').disabled = repairBusy || !$('efm-playlist').value;
+        $('efm-playlist').disabled = repairBusy;
         const visible = [...document.querySelectorAll('.efm-file')];
         const checked = visible.filter((input) => input.checked).length;
         const all = $('efm-all');
@@ -103,6 +123,77 @@
         selected.clear();
         document.querySelectorAll('.efm-file').forEach((input) => { input.checked = false; });
         updateSelectionUi();
+    }
+
+    function formatDuration(value) {
+        if (value === null || value === undefined || value === '') return 'Missing';
+        const seconds = Number(value);
+        if (!Number.isFinite(seconds)) return 'Invalid';
+        const rounded = Math.max(0, Math.round(seconds));
+        const hours = Math.floor(rounded / 3600);
+        const minutes = Math.floor((rounded % 3600) / 60);
+        const secs = rounded % 60;
+        const clock = (hours ? String(hours).padStart(2, '0') + ':' : '') + String(minutes).padStart(2, '0') + ':' + String(secs).padStart(2, '0');
+        return Number(seconds.toFixed(3)) + ' s (' + clock + ')';
+    }
+
+    function formatTotals(info) {
+        if (!info) return '<p class="text-muted mb-0">Playlist totals were not returned.</p>';
+        return '<div class="table-responsive"><table class="table table-sm mb-0"><thead><tr><th>Totals</th><th>Current</th><th>Proposed</th></tr></thead><tbody><tr><th scope="row">Items</th><td>' + escapeHtml(info.beforeItems) + '</td><td>' + escapeHtml(info.afterItems) + '</td></tr><tr><th scope="row">Duration</th><td>' + escapeHtml(formatDuration(info.beforeDuration)) + '</td><td>' + escapeHtml(formatDuration(info.afterDuration)) + '</td></tr></tbody></table></div>';
+    }
+
+    function renderRepairResult(data) {
+        const updates = Array.isArray(data.updates) ? data.updates : [];
+        const errors = Array.isArray(data.errors) ? data.errors : [];
+        const before = data.before || {};
+        const after = data.after || {};
+        const totals = {beforeItems: before.total_items || 0, afterItems: after.total_items || 0, beforeDuration: before.total_duration || 0, afterDuration: after.total_duration || 0};
+        let html = '<p class="mb-2"><strong>' + escapeHtml(data.playlist || $('efm-playlist').value) + '</strong>: ' + (data.applied ? 'repair applied successfully.' : updates.length ? 'the following entries can be repaired.' : 'no missing video durations were found.') + '</p>' + formatTotals(totals);
+        if (updates.length) {
+            html += '<div class="table-responsive mt-3"><table class="table table-sm"><thead><tr><th>Section / entry</th><th>Media</th><th>Current</th><th>Proposed</th></tr></thead><tbody>';
+            html += updates.map((item) => '<tr><td>' + escapeHtml(item.section + ' [' + item.index + ']') + '</td><td class="text-break">' + escapeHtml(item.path) + '</td><td>' + escapeHtml(formatDuration(item.currentDuration)) + '</td><td>' + escapeHtml(formatDuration(item.proposedDuration)) + '</td></tr>').join('');
+            html += '</tbody></table></div>';
+        }
+        if (errors.length) html += '<div class="alert alert-danger mt-3 mb-0"><strong>Repair could not be completed:</strong><ul class="mb-0">' + errors.map((error) => '<li>' + escapeHtml(error) + '</li>').join('') + '</ul></div>';
+        $('efm-repair-results').innerHTML = html;
+        $('efm-repair-panel').hidden = false;
+        $('efm-repair-confirm').hidden = data.applied || !data.ok || updates.length === 0;
+        repairPreview = !data.applied && data.ok && updates.length ? data : null;
+    }
+
+    function renderRepairError(message, errors) {
+        const details = Array.isArray(errors) && errors.length ? '<ul class="mb-0">' + errors.map((error) => '<li>' + escapeHtml(error) + '</li>').join('') + '</ul>' : '';
+        $('efm-repair-results').innerHTML = '<div class="alert alert-danger mb-0">' + escapeHtml(message || 'Unable to inspect playlist durations.') + details + '</div>';
+        $('efm-repair-panel').hidden = false;
+        $('efm-repair-confirm').hidden = true;
+    }
+
+    async function requestRepair(apply) {
+        if (repairBusy || !$('efm-playlist').value || (apply && !repairPreview)) return;
+        const playlist = $('efm-playlist').value;
+        repairBusy = true;
+        updateSelectionUi();
+        $('efm-repair').textContent = apply ? 'Applying Repair…' : 'Checking Durations…';
+        try {
+            const body = {playlist};
+            if (apply) body.apply = true;
+            const response = await fetch(base + 'repair', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+            const raw = await response.text();
+            let data;
+            try { data = JSON.parse(raw); } catch (error) { throw new Error('The repair response was malformed.'); }
+            if (!response.ok || !data || data.ok === false) {
+                renderRepairError(data && data.error ? data.error : 'Repair request failed.', data && data.errors);
+                return;
+            }
+            renderRepairResult(data);
+            if (data.applied) loadFolder(current);
+        } catch (error) {
+            renderRepairError(error.message || 'Unable to contact the repair API.');
+        } finally {
+            repairBusy = false;
+            $('efm-repair').textContent = 'Repair Playlist Durations';
+            updateSelectionUi();
+        }
     }
 
     function renderBreadcrumbs() {
@@ -168,7 +259,19 @@
         showMessage('Selection cleared.', 'secondary');
     });
 
-    $('efm-playlist').addEventListener('change', updateSelectionUi);
+    $('efm-playlist').addEventListener('change', () => {
+        repairPreview = null;
+        $('efm-repair-panel').hidden = true;
+        updateSelectionUi();
+    });
+
+    $('efm-repair').addEventListener('click', () => requestRepair(false));
+    $('efm-repair-cancel').addEventListener('click', () => {
+        repairPreview = null;
+        $('efm-repair-panel').hidden = true;
+        $('efm-repair-confirm').hidden = true;
+    });
+    $('efm-repair-confirm').addEventListener('click', () => requestRepair(true));
 
     $('efm-add').addEventListener('click', async () => {
         const paths = [...selected];

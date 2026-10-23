@@ -33,12 +33,20 @@ $repairPlaylist = array('name'=>'Repair','mainPlaylist'=>array(array('type'=>'me
 file_put_contents($base . '/playlists/Repair.json', json_encode($repairPlaylist));
 $preview = efm_repair_playlist_durations($settings, 'Repair', false);
 duration_check($preview['ok'] && !$preview['applied'] && count($preview['updates']) === 1, 'repair dry-run reports missing duration without writing');
+duration_check($preview['updates'][0]['currentDuration'] === null && $preview['updates'][0]['proposedDuration'] === 42.5, 'repair reports current and proposed duration');
+duration_check($preview['before']['total_duration'] === 0.0 && $preview['after']['total_duration'] === 52.5, 'repair reports current and proposed totals');
 $dryRun = file_get_contents($base . '/playlists/Repair.json');
 $dryDecoded = json_decode($dryRun, true);
 duration_check(!isset($dryDecoded['mainPlaylist'][0]['duration']), 'repair dry-run leaves playlist unchanged');
 $applied = efm_repair_playlist_durations($settings, 'Repair', true);
 $repaired = json_decode(file_get_contents($base . '/playlists/Repair.json'), true);
-duration_check($applied['ok'] && $applied['applied'] && $repaired['mainPlaylist'][0]['duration'] === 42.5 && $repaired['mainPlaylist'][1]['label'] === 'keep', 'repair applies only missing duration and preserves metadata');
+duration_check($applied['ok'] && $applied['applied'] && $applied['after']['total_duration'] === 52.5 && $repaired['mainPlaylist'][0]['duration'] === 42.5 && $repaired['mainPlaylist'][1]['label'] === 'keep', 'repair applies only missing duration and preserves metadata');
 
-unlink($base . '/playlists/Christmas.json'); unlink($base . '/playlists/Repair.json'); unlink($base . '/videos/Christmas/existing.mp4'); unlink($base . '/videos/Christmas/new.mp4'); unlink($base . '/videos/Easter/repair.mp4'); unlink($base . '/videos/Easter/broken.mp4'); unlink($probe); rmdir($base . '/videos/Christmas'); rmdir($base . '/videos/Easter'); rmdir($base . '/videos'); rmdir($base . '/playlists'); rmdir($base);
+$brokenRepair = array('name'=>'Broken','mainPlaylist'=>array(array('type'=>'media','mediaName'=>'Easter/broken.mp4')), 'playlistInfo'=>array('total_items'=>1));
+file_put_contents($base . '/playlists/Broken.json', json_encode($brokenRepair));
+$brokenBefore = file_get_contents($base . '/playlists/Broken.json');
+$failedRepair = efm_repair_playlist_durations($settings, 'Broken', true);
+duration_check(!$failedRepair['ok'] && !$failedRepair['applied'] && count($failedRepair['errors']) === 1 && file_get_contents($base . '/playlists/Broken.json') === $brokenBefore, 'failed repair probe makes no changes');
+
+unlink($base . '/playlists/Christmas.json'); unlink($base . '/playlists/Repair.json'); unlink($base . '/playlists/Broken.json'); unlink($base . '/videos/Christmas/existing.mp4'); unlink($base . '/videos/Christmas/new.mp4'); unlink($base . '/videos/Easter/repair.mp4'); unlink($base . '/videos/Easter/broken.mp4'); unlink($probe); rmdir($base . '/videos/Christmas'); rmdir($base . '/videos/Easter'); rmdir($base . '/videos'); rmdir($base . '/playlists'); rmdir($base);
 echo "PASS\n";
