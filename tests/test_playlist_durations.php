@@ -53,7 +53,8 @@ file_put_contents($base . '/playlists/Mutated.json', json_encode($mutatedPlaylis
 $mutatedPreview = efm_repair_playlist_durations($settings, 'Mutated', false);
 file_put_contents($base . '/videos/Easter/repair.mp4', 'changed');
 $mutatedApply = efm_repair_playlist_durations($settings, 'Mutated', true, $mutatedPreview['repairToken']);
-duration_check(!$mutatedApply['ok'] && !$mutatedApply['applied'] && !isset(json_decode(file_get_contents($base . '/playlists/Mutated.json'), true)['mainPlaylist'][0]['duration']), 'changed media invalidates cached repair without writing');
+$mutatedSaved = json_decode(file_get_contents($base . '/playlists/Mutated.json'), true);
+duration_check($mutatedApply['ok'] && $mutatedApply['applied'] && $mutatedSaved['mainPlaylist'][0]['duration'] === 42.5, 'confirmation does not reread or revalidate media contents');
 
 $brokenRepair = array('name'=>'Broken','mainPlaylist'=>array(array('type'=>'media','mediaName'=>'Easter/broken.mp4')), 'playlistInfo'=>array('total_items'=>1));
 file_put_contents($base . '/playlists/Broken.json', json_encode($brokenRepair));

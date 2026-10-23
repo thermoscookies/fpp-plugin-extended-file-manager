@@ -147,7 +147,7 @@ function efm_repair_cache_consume($settings, $token)
     return is_array($cache) && isset($cache['token'], $cache['expires']) && hash_equals($cache['token'], $token) && (int) $cache['expires'] >= time() ? $cache : false;
 }
 
-function efm_repair_file_hash($file)
+function efm_playlist_hash($file)
 {
     $hash = is_string($file) && is_file($file) && is_readable($file) ? hash_file('sha256', $file) : false;
     return is_string($hash) && $hash !== '' ? $hash : false;
@@ -156,8 +156,8 @@ function efm_repair_file_hash($file)
 function efm_apply_repair_token($settings, $storage, $root, $token)
 {
     $cache = efm_repair_cache_consume($settings, $token);
-    if ($cache === false || !isset($cache['playlist'], $cache['playlistHash'], $cache['mediaHashes'], $cache['updates']) || $cache['playlist'] !== $storage['name']) return array('ok' => false, 'applied' => false, 'playlist' => $storage['name'], 'errors' => array('The repair preview is missing, expired, or already used.'));
-    $currentHash = efm_repair_file_hash($storage['file']);
+    if ($cache === false || !isset($cache['playlist'], $cache['playlistHash'], $cache['updates']) || $cache['playlist'] !== $storage['name']) return array('ok' => false, 'applied' => false, 'playlist' => $storage['name'], 'errors' => array('The repair preview is missing, expired, or already used.'));
+    $currentHash = efm_playlist_hash($storage['file']);
     if (!is_string($cache['playlistHash']) || $currentHash === false || !hash_equals($cache['playlistHash'], $currentHash)) return array('ok' => false, 'applied' => false, 'playlist' => $storage['name'], 'errors' => array('The playlist changed after the preview. Run the dry-run again.'));
     $handle = fopen($storage['file'], 'c+');
     if ($handle === false || !flock($handle, LOCK_EX)) return array('ok' => false, 'applied' => false, 'playlist' => $storage['name'], 'errors' => array('Could not lock playlist.'));
@@ -167,8 +167,7 @@ function efm_apply_repair_token($settings, $storage, $root, $token)
         if (!is_array($update) || !isset($update['section'], $update['index'], $update['path'], $update['proposedDuration']) || !array_key_exists('currentDuration', $update) || !isset($playlist[$update['section']][$update['index']]) || !is_array($playlist[$update['section']][$update['index']])) { flock($handle, LOCK_UN); fclose($handle); return array('ok' => false, 'applied' => false, 'playlist' => $storage['name'], 'errors' => array('The playlist changed after the preview. Run the dry-run again.')); }
         $entry = $playlist[$update['section']][$update['index']];
         if (!isset($entry['mediaName']) || $entry['mediaName'] !== $update['path'] || (isset($entry['duration']) ? $entry['duration'] !== $update['currentDuration'] : $update['currentDuration'] !== null)) { flock($handle, LOCK_UN); fclose($handle); return array('ok' => false, 'applied' => false, 'playlist' => $storage['name'], 'errors' => array('The playlist changed after the preview. Run the dry-run again.')); }
-        $file = efm_path_inside($root, $update['path'], true);
-        if ($file === false || !isset($cache['mediaHashes'][$update['path']]) || !is_string($cache['mediaHashes'][$update['path']]) || efm_repair_file_hash($file) !== $cache['mediaHashes'][$update['path']]) { flock($handle, LOCK_UN); fclose($handle); return array('ok' => false, 'applied' => false, 'playlist' => $storage['name'], 'errors' => array('A referenced media file changed after the preview. Run the dry-run again.')); }
+        if (efm_path_inside($root, $update['path'], true) === false) { flock($handle, LOCK_UN); fclose($handle); return array('ok' => false, 'applied' => false, 'playlist' => $storage['name'], 'errors' => array('A referenced media file is no longer available. Run the dry-run again.')); }
         $playlist[$update['section']][$update['index']]['duration'] = $update['proposedDuration'];
     }
     $before = efm_playlist_info_summary($playlist);
@@ -222,7 +221,7 @@ function efm_repair_playlist_durations($settings, $playlistName, $apply = false,
     $storage = efm_playlist_storage($settings, $playlistName);
     if ($root === false || $storage === false) return array('ok' => false, 'error' => 'Playlist or media storage is unavailable.');
     if ($apply) return efm_apply_repair_token($settings, $storage, $root, $repairToken);
-    $playlistHash = efm_repair_file_hash($storage['file']);
+    $playlistHash = efm_playlist_hash($storage['file']);
     if ($playlistHash === false) return array('ok' => false, 'applied' => false, 'playlist' => $storage['name'], 'errors' => array('Could not verify the playlist safely.'));
     $handle = fopen($storage['file'], 'c+');
     if ($handle === false || !flock($handle, LOCK_EX)) return array('ok' => false, 'error' => 'Could not lock playlist.');
@@ -231,7 +230,6 @@ function efm_repair_playlist_durations($settings, $playlistName, $apply = false,
     $before = efm_playlist_info_summary($playlist);
     $proposed = $playlist;
     $updates = array();
-    $mediaHashes = array();
     $errors = array();
     foreach (array('leadIn', 'mainPlaylist', 'leadOut') as $section) {
         if (!isset($playlist[$section]) || !is_array($playlist[$section])) continue;
@@ -242,9 +240,6 @@ function efm_repair_playlist_durations($settings, $playlistName, $apply = false,
             if ($file === false) { $errors[] = $section . '[' . $index . '] ' . (isset($entry['mediaName']) ? $entry['mediaName'] : 'unknown media'); continue; }
             $duration = efm_probe_duration($file, efm_probe_binary($settings));
             if ($duration === false) { $errors[] = $section . '[' . $index . '] ' . $path; continue; }
-            $mediaHash = efm_repair_file_hash($file);
-            if ($mediaHash === false) { $errors[] = $section . '[' . $index . '] ' . $path; continue; }
-            $mediaHashes[$path] = $mediaHash;
             $updates[] = array('section' => $section, 'index' => $index, 'path' => $path, 'currentDuration' => isset($entry['duration']) ? $entry['duration'] : null, 'proposedDuration' => $duration);
             $proposed[$section][$index]['duration'] = $duration;
         }
@@ -253,7 +248,7 @@ function efm_repair_playlist_durations($settings, $playlistName, $apply = false,
     efm_recalculate_playlist_info($afterPlaylist);
     $result = array('ok' => count($errors) === 0, 'applied' => false, 'playlist' => $storage['name'], 'updates' => $updates, 'errors' => $errors, 'before' => $before, 'after' => efm_playlist_info_summary($afterPlaylist));
     if (count($errors) > 0 || count($updates) === 0) { flock($handle, LOCK_UN); fclose($handle); return $result; }
-    $stored = efm_repair_cache_store($settings, array('playlist' => $storage['name'], 'playlistHash' => $playlistHash, 'mediaHashes' => $mediaHashes, 'updates' => $updates));
+    $stored = efm_repair_cache_store($settings, array('playlist' => $storage['name'], 'playlistHash' => $playlistHash, 'updates' => $updates));
     if ($stored === false) { flock($handle, LOCK_UN); fclose($handle); return array_merge($result, array('ok' => false, 'errors' => array('Could not store the repair preview safely.'))); }
     $result['repairToken'] = $stored['token'];
     $result['repairTokenExpires'] = $stored['expires'];
