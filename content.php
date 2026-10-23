@@ -99,6 +99,12 @@
         all.indeterminate = checked > 0 && checked < visible.length;
     }
 
+    function clearSelection() {
+        selected.clear();
+        document.querySelectorAll('.efm-file').forEach((input) => { input.checked = false; });
+        updateSelectionUi();
+    }
+
     function renderBreadcrumbs() {
         const parts = current ? current.split('/') : [];
         const crumbs = ['<button class="btn btn-link btn-sm p-0" type="button" data-path="">Videos</button>'];
@@ -118,7 +124,9 @@
     }
 
     async function loadFolder(path) {
-        current = path || '';
+        const next = path || '';
+        if (next !== current) clearSelection();
+        current = next;
         const response = await fetch(base + 'media?path=' + encodeURIComponent(current));
         const data = await response.json();
         if (!response.ok) {
@@ -156,9 +164,7 @@
     });
 
     $('efm-clear').addEventListener('click', () => {
-        selected.clear();
-        document.querySelectorAll('.efm-file').forEach((input) => { input.checked = false; });
-        updateSelectionUi();
+        clearSelection();
         showMessage('Selection cleared.', 'secondary');
     });
 
@@ -173,6 +179,7 @@
             const response = await fetch(base + 'add', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({playlist: $('efm-playlist').value, paths})});
             const data = await response.json();
             if (!response.ok) throw new Error(data.error || 'Unable to update the playlist.');
+            clearSelection();
             showMessage('Added ' + data.added + ' video(s); skipped ' + data.skipped + ' duplicate(s).', 'success');
         } catch (error) {
             showMessage(error.message || 'Unable to update the playlist.', 'danger');
