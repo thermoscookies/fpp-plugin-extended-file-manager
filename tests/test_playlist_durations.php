@@ -9,7 +9,8 @@ file_put_contents($base . '/videos/Christmas/new.mp4', 'video');
 file_put_contents($base . '/videos/Easter/repair.mp4', 'video');
 file_put_contents($base . '/videos/Easter/broken.mp4', 'video');
 $probe = $base . '/ffprobe';
-file_put_contents($probe, "#!/bin/sh\nfile=\"\"\nfor arg do file=\"\$arg\"; done\ncase \"\$file\" in\n*existing.mp4) echo 10;;\n*new.mp4) echo 169.202375;;\n*repair.mp4) echo 42.5;;\n*broken.mp4) exit 1;;\n*) echo 1;;\nesac\n");
+$probeCount = $base . '/probe-count';
+file_put_contents($probe, "#!/bin/sh\necho 1 >> \"$probeCount\"\nfile=\"\"\nfor arg do file=\"\$arg\"; done\ncase \"\$file\" in\n*existing.mp4) echo 10;;\n*new.mp4) echo 169.202375;;\n*repair.mp4) echo 42.5;;\n*broken.mp4) exit 1;;\n*) echo 1;;\nesac\n");
 chmod($probe, 0755);
 $settings = array('mediaDirectory'=>$base, 'videoDirectory'=>$base . '/videos', 'playlistDirectory'=>$base . '/playlists', 'ffprobeBinary'=>$probe);
 function duration_check($condition, $message) { if (!$condition) { fwrite(STDERR, "FAIL: $message\n"); exit(1); } }
@@ -38,9 +39,21 @@ duration_check($preview['before']['total_duration'] === 0.0 && $preview['after']
 $dryRun = file_get_contents($base . '/playlists/Repair.json');
 $dryDecoded = json_decode($dryRun, true);
 duration_check(!isset($dryDecoded['mainPlaylist'][0]['duration']), 'repair dry-run leaves playlist unchanged');
-$applied = efm_repair_playlist_durations($settings, 'Repair', true);
+$durationProbeCount = (int) trim(file_get_contents($probeCount));
+$applied = efm_repair_playlist_durations($settings, 'Repair', true, $preview['repairToken']);
+$durationProbeCountAfterApply = (int) trim(file_get_contents($probeCount));
+duration_check($durationProbeCountAfterApply === $durationProbeCount, 'repair confirmation uses cached probe results');
 $repaired = json_decode(file_get_contents($base . '/playlists/Repair.json'), true);
 duration_check($applied['ok'] && $applied['applied'] && $applied['after']['total_duration'] === 52.5 && $repaired['mainPlaylist'][0]['duration'] === 42.5 && $repaired['mainPlaylist'][1]['label'] === 'keep', 'repair applies only missing duration and preserves metadata');
+$secondUse = efm_repair_playlist_durations($settings, 'Repair', true, $preview['repairToken']);
+duration_check(!$secondUse['ok'] && !$secondUse['applied'], 'repair token is single-use');
+
+$mutatedPlaylist = array('name'=>'Mutated','mainPlaylist'=>array(array('type'=>'media','mediaName'=>'Easter/repair.mp4')), 'playlistInfo'=>array('total_items'=>1));
+file_put_contents($base . '/playlists/Mutated.json', json_encode($mutatedPlaylist));
+$mutatedPreview = efm_repair_playlist_durations($settings, 'Mutated', false);
+file_put_contents($base . '/videos/Easter/repair.mp4', 'changed');
+$mutatedApply = efm_repair_playlist_durations($settings, 'Mutated', true, $mutatedPreview['repairToken']);
+duration_check(!$mutatedApply['ok'] && !$mutatedApply['applied'] && !isset(json_decode(file_get_contents($base . '/playlists/Mutated.json'), true)['mainPlaylist'][0]['duration']), 'changed media invalidates cached repair without writing');
 
 $brokenRepair = array('name'=>'Broken','mainPlaylist'=>array(array('type'=>'media','mediaName'=>'Easter/broken.mp4')), 'playlistInfo'=>array('total_items'=>1));
 file_put_contents($base . '/playlists/Broken.json', json_encode($brokenRepair));
@@ -48,5 +61,6 @@ $brokenBefore = file_get_contents($base . '/playlists/Broken.json');
 $failedRepair = efm_repair_playlist_durations($settings, 'Broken', true);
 duration_check(!$failedRepair['ok'] && !$failedRepair['applied'] && count($failedRepair['errors']) === 1 && file_get_contents($base . '/playlists/Broken.json') === $brokenBefore, 'failed repair probe makes no changes');
 
-unlink($base . '/playlists/Christmas.json'); unlink($base . '/playlists/Repair.json'); unlink($base . '/playlists/Broken.json'); unlink($base . '/videos/Christmas/existing.mp4'); unlink($base . '/videos/Christmas/new.mp4'); unlink($base . '/videos/Easter/repair.mp4'); unlink($base . '/videos/Easter/broken.mp4'); unlink($probe); rmdir($base . '/videos/Christmas'); rmdir($base . '/videos/Easter'); rmdir($base . '/videos'); rmdir($base . '/playlists'); rmdir($base);
+function duration_remove_tree($path) { if (!is_dir($path)) { if (is_file($path)) unlink($path); return; } foreach (scandir($path) as $item) if ($item !== '.' && $item !== '..') duration_remove_tree($path . DIRECTORY_SEPARATOR . $item); rmdir($path); }
+duration_remove_tree($base);
 echo "PASS\n";

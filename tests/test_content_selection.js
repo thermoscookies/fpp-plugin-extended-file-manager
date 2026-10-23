@@ -26,7 +26,7 @@ const folders = {
 };
 let addResponse = {ok: true, body: {added: 1, skipped: 0}};
 let addedPayloads = [];
-let repairResponse = {ok: true, body: {ok: true, playlist: 'Easter', applied: false, updates: [{section: 'mainPlaylist', index: 0, path: 'Easter/easter-1.mp4', currentDuration: null, proposedDuration: 12.5}], errors: [], before: {total_items: 1, total_duration: 0}, after: {total_items: 1, total_duration: 12.5}}};
+let repairResponse = {ok: true, body: {ok: true, playlist: 'Easter', applied: false, repairToken: 'a'.repeat(48), updates: [{section: 'mainPlaylist', index: 0, path: 'Easter/easter-1.mp4', currentDuration: null, proposedDuration: 12.5}], errors: [], before: {total_items: 1, total_duration: 0}, after: {total_items: 1, total_duration: 12.5}}};
 let repairPayloads = [];
 
 const document = {
@@ -87,6 +87,7 @@ const clickPath = (path) => document.listeners.click({target: {closest: () => ({
     await elements['efm-repair'].dispatch('click');
     await settle();
     assert.strictEqual(repairPayloads[0].apply, undefined, 'repair starts with a dry-run');
+    assert.strictEqual(repairPayloads[0].repairToken, undefined, 'dry-run does not send a token');
     assert.strictEqual(elements['efm-repair-confirm'].hidden, false, 'repair confirmation appears for changes');
     assert.strictEqual(elements['efm-selected-count'].textContent, 1, 'repair preview preserves selection');
     await elements['efm-repair-cancel'].dispatch('click');
@@ -97,7 +98,11 @@ const clickPath = (path) => document.listeners.click({target: {closest: () => ({
     await elements['efm-repair-confirm'].dispatch('click');
     await settle();
     assert.strictEqual(repairPayloads[2].apply, true, 'confirm sends explicit apply');
+    assert.strictEqual(repairPayloads[2].repairToken, 'a'.repeat(48), 'confirm sends only the server-issued token');
+    assert.strictEqual(repairPayloads[2].updates, undefined, 'confirm does not send client duration data');
     assert.strictEqual(elements['efm-repair-confirm'].hidden, true, 'confirm is removed after apply');
+    assert.strictEqual(elements['efm-repair'].disabled, false, 'repair button leaves busy state after success');
+    assert.strictEqual(elements['efm-playlist'].disabled, false, 'playlist control leaves busy state after success');
     assert.strictEqual(elements['efm-selected-count'].textContent, 1, 'successful repair preserves selection');
 
     repairResponse = {ok: true, raw: 'not-json'};
@@ -105,5 +110,6 @@ const clickPath = (path) => document.listeners.click({target: {closest: () => ({
     await settle();
     assert.ok(elements['efm-repair-results'].innerHTML.includes('malformed'), 'malformed repair responses are reported');
     assert.strictEqual(elements['efm-repair-confirm'].hidden, true, 'malformed response cannot be confirmed');
+    assert.strictEqual(elements['efm-repair'].disabled, false, 'repair button leaves busy state after failure');
     console.log('PASS');
 })().catch((error) => { console.error(error); process.exitCode = 1; });

@@ -168,31 +168,50 @@
         $('efm-repair-confirm').hidden = true;
     }
 
+    function setRepairBusy(busy, applying) {
+        repairBusy = busy;
+        $('efm-repair').textContent = busy ? (applying ? 'Applying Repair…' : 'Checking Durations…') : 'Repair Playlist Durations';
+        $('efm-repair-cancel').disabled = busy;
+        $('efm-repair-confirm').disabled = busy;
+        updateSelectionUi();
+    }
+
     async function requestRepair(apply) {
         if (repairBusy || !$('efm-playlist').value || (apply && !repairPreview)) return;
         const playlist = $('efm-playlist').value;
-        repairBusy = true;
-        updateSelectionUi();
-        $('efm-repair').textContent = apply ? 'Applying Repair…' : 'Checking Durations…';
+        const token = apply ? repairPreview.repairToken : null;
+        if (apply && !token) {
+            renderRepairError('The repair preview has expired. Run the dry-run again.');
+            repairPreview = null;
+            return;
+        }
+        setRepairBusy(true, apply);
         try {
             const body = {playlist};
-            if (apply) body.apply = true;
+            if (apply) { body.apply = true; body.repairToken = token; }
             const response = await fetch(base + 'repair', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
             const raw = await response.text();
             let data;
-            try { data = JSON.parse(raw); } catch (error) { throw new Error('The repair response was malformed.'); }
+            try { data = raw ? JSON.parse(raw) : null; } catch (error) { throw new Error('The repair response was malformed.'); }
+            if (!data || typeof data !== 'object') throw new Error('The repair response was malformed.');
             if (!response.ok || !data || data.ok === false) {
                 renderRepairError(data && data.error ? data.error : 'Repair request failed.', data && data.errors);
                 return;
             }
             renderRepairResult(data);
-            if (data.applied) loadFolder(current);
+            if (data.applied) {
+                showMessage('Playlist durations repaired successfully. Refreshing the file manager…', 'success');
+                try {
+                    await loadFolder(current);
+                    showMessage('Playlist durations repaired successfully.', 'success');
+                } catch (refreshError) {
+                    showMessage('Repair succeeded, but the file manager could not refresh: ' + (refreshError.message || 'unknown error'), 'warning');
+                }
+            }
         } catch (error) {
             renderRepairError(error.message || 'Unable to contact the repair API.');
         } finally {
-            repairBusy = false;
-            $('efm-repair').textContent = 'Repair Playlist Durations';
-            updateSelectionUi();
+            setRepairBusy(false, false);
         }
     }
 
@@ -267,6 +286,7 @@
 
     $('efm-repair').addEventListener('click', () => requestRepair(false));
     $('efm-repair-cancel').addEventListener('click', () => {
+        if (repairBusy) return;
         repairPreview = null;
         $('efm-repair-panel').hidden = true;
         $('efm-repair-confirm').hidden = true;
