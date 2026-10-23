@@ -22,8 +22,13 @@
     #efm-app .efm-folder-icon { color: var(--bs-warning, #f0ad4e); }
     #efm-app .efm-video-icon { color: var(--bs-info, #5bc0de); }
     #efm-app .efm-message:empty { display: none; }
-    #efm-app .efm-repair-panel { border: 1px solid var(--bs-border-color, rgba(128, 128, 128, .35)); border-radius: .375rem; background: var(--bs-tertiary-bg, rgba(128, 128, 128, .12)); }
-    #efm-app .efm-repair-results { max-height: 20rem; overflow: auto; }
+    #efm-app .efm-repair-modal { position: fixed; inset: 0; z-index: 1050; display: flex; align-items: center; justify-content: center; padding: 1rem; background: rgba(0, 0, 0, .65); }
+    #efm-app .efm-repair-dialog { display: flex; flex-direction: column; width: min(56rem, 100%); max-height: min(90vh, 48rem); border: 1px solid var(--bs-border-color, rgba(128, 128, 128, .5)); border-radius: .5rem; background: var(--bs-body-bg, #212529); box-shadow: 0 .5rem 1.5rem rgba(0, 0, 0, .45); }
+    #efm-app .efm-repair-dialog-header,
+    #efm-app .efm-repair-dialog-footer { flex: 0 0 auto; }
+    #efm-app .efm-repair-dialog-header { border-bottom: 1px solid var(--bs-border-color, rgba(128, 128, 128, .35)); }
+    #efm-app .efm-repair-dialog-footer { border-top: 1px solid var(--bs-border-color, rgba(128, 128, 128, .35)); }
+    #efm-app .efm-repair-results { min-height: 0; overflow: auto; }
     #efm-app .efm-repair-results table { margin-bottom: 0; }
     @media (max-width: 575.98px) {
         #efm-app .efm-toolbar .efm-playlist,
@@ -61,17 +66,19 @@
         </div>
     </div>
 
-    <section id="efm-repair-panel" class="efm-repair-panel p-3 mb-3" hidden aria-labelledby="efm-repair-title">
-        <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-2">
+    <div id="efm-repair-panel" class="efm-repair-modal" hidden>
+      <section class="efm-repair-dialog" role="dialog" aria-modal="true" aria-labelledby="efm-repair-title">
+        <div class="efm-repair-dialog-header d-flex flex-wrap align-items-center justify-content-between gap-2 p-3">
             <h3 id="efm-repair-title" class="h5 mb-0">Repair Playlist Durations</h3>
             <span class="text-muted small">Dry-run preview; no changes are made until confirmed.</span>
         </div>
-        <div id="efm-repair-results" class="efm-repair-results"></div>
-        <div class="d-flex flex-wrap gap-2 mt-3">
+        <div id="efm-repair-results" class="efm-repair-results p-3"></div>
+        <div class="efm-repair-dialog-footer d-flex flex-wrap justify-content-end gap-2 p-3">
             <button id="efm-repair-cancel" class="btn btn-outline-secondary" type="button">Cancel</button>
             <button id="efm-repair-confirm" class="btn btn-warning" type="button" hidden>Confirm Repair</button>
         </div>
-    </section>
+      </section>
+    </div>
 
     <div class="efm-browser p-2 p-sm-3">
         <nav id="efm-breadcrumb" class="efm-breadcrumbs mb-3" aria-label="Video folders"></nav>
@@ -168,6 +175,13 @@
         $('efm-repair-confirm').hidden = true;
     }
 
+    function closeRepairModal(force) {
+        if (repairBusy && !force) return;
+        repairPreview = null;
+        $('efm-repair-panel').hidden = true;
+        $('efm-repair-confirm').hidden = true;
+    }
+
     function setRepairBusy(busy, applying) {
         repairBusy = busy;
         $('efm-repair').textContent = busy ? (applying ? 'Applying Repair…' : 'Checking Durations…') : 'Repair Playlist Durations';
@@ -200,6 +214,7 @@
             }
             renderRepairResult(data);
             if (data.applied) {
+                closeRepairModal(true);
                 showMessage('Playlist durations repaired successfully. Refreshing the file manager…', 'success');
                 try {
                     await loadFolder(current);
@@ -235,7 +250,6 @@
 
     async function loadFolder(path) {
         const next = path || '';
-        if (next !== current) clearSelection();
         current = next;
         const response = await fetch(base + 'media?path=' + encodeURIComponent(current));
         const data = await response.json();
@@ -279,19 +293,18 @@
     });
 
     $('efm-playlist').addEventListener('change', () => {
-        repairPreview = null;
-        $('efm-repair-panel').hidden = true;
+        closeRepairModal();
         updateSelectionUi();
     });
 
     $('efm-repair').addEventListener('click', () => requestRepair(false));
     $('efm-repair-cancel').addEventListener('click', () => {
-        if (repairBusy) return;
-        repairPreview = null;
-        $('efm-repair-panel').hidden = true;
-        $('efm-repair-confirm').hidden = true;
+        closeRepairModal();
     });
     $('efm-repair-confirm').addEventListener('click', () => requestRepair(true));
+    document.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape') closeRepairModal();
+    });
 
     $('efm-add').addEventListener('click', async () => {
         const paths = [...selected];
